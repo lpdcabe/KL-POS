@@ -1,5 +1,9 @@
 function resolveApiUrl() {
-  const configuredUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+  const configuredUrl = import.meta.env.VITE_API_URL
+    || (import.meta.env.DEV ? 'http://localhost:3001' : '')
+
+  // Production uses the same Vercel origin for both the browser and /api.
+  if (!configuredUrl) return ''
 
   try {
     const url = new URL(configuredUrl)

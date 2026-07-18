@@ -8,13 +8,17 @@ const required = ['SUPABASE_URL', 'SUPABASE_PUBLISHABLE_KEY']
 
 export function getConfig() {
   const missing = required.filter((key) => !process.env[key])
+  const vercelOrigins = [process.env.VERCEL_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]
+    .filter(Boolean)
+    .map((host) => `https://${host}`)
 
   return {
     port: Number(process.env.PORT || 3001),
     webOrigins: (process.env.WEB_ORIGIN || 'http://localhost:5173')
       .split(',')
       .map((origin) => origin.trim())
-      .filter(Boolean),
+      .filter(Boolean)
+      .concat(vercelOrigins),
     trustProxy: process.env.TRUST_PROXY === 'true',
     supabaseUrl: process.env.SUPABASE_URL || '',
     supabasePublishableKey: process.env.SUPABASE_PUBLISHABLE_KEY || '',
