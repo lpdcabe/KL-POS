@@ -126,6 +126,17 @@ ordersRouter.post('/', allowPermission('pos', 'owner_admin', 'manager', 'cashier
     })
     if (paymentError) return failOrder('The payment record could not be saved.')
 
+    const { error: inventoryError } = await admin.rpc('deduct_order_inventory', {
+      target_order_id: order.id,
+      inventory_actor_id: req.user.id
+    })
+    if (inventoryError) {
+      await admin.from('payments').update({ status: 'voided' }).eq('order_id', order.id)
+      const message = inventoryError.message?.replace(/^.*?exception:\s*/i, '') || 'Inventory could not be deducted.'
+      await admin.from('orders').update({ status: 'failed', cancellation_reason: message }).eq('id', order.id)
+      return res.status(409).json({ error: message })
+    }
+
     await admin.from('order_status_history').insert({ order_id: order.id, from_status: null, to_status: 'confirmed', changed_by: req.user.id })
     await admin.from('audit_logs').insert({ store_id: store.id, actor_id: req.user.id, action: 'order.created', entity_type: 'order', entity_id: order.id, metadata: { order_number: order.order_number, channel: order.channel, total: subtotal, payment_method: input.paymentMethod } })
     return res.status(201).json({ order: { ...order, paymentMethod: input.paymentMethod, change: tendered === null ? 0 : Number((tendered - subtotal).toFixed(2)) } })

@@ -24,6 +24,12 @@ const productSchema = z.object({
   flavors: z.array(z.string().trim().min(1).max(80)).max(30).default([])
 })
 const flavorsSchema = z.object({ flavors: z.array(z.string().trim().min(1).max(80)).min(1).max(30) })
+const recipeSchema = z.object({
+  components: z.array(z.object({
+    inventoryItemId: z.uuid(),
+    quantityRequired: z.coerce.number().positive().max(999999)
+  })).min(1).max(50)
+})
 
 async function getStore(admin) {
   const { data, error } = await admin.from('stores').select('id, name, code, address, timezone, currency_code, is_active, updated_at').eq('is_active', true).order('created_at').limit(1).maybeSingle()
@@ -39,13 +45,14 @@ settingsRouter.get('/', allowAnyPermission('settings.store', 'settings.terminals
     const store = await getStore(admin)
     if (!store) return res.status(404).json({ error: 'No active store is configured.' })
 
-    const [{ data: terminals, error: terminalError }, { data: categories, error: categoryError }, { data: products, error: productError }, { count: openShifts, error: shiftError }] = await Promise.all([
+    const [{ data: terminals, error: terminalError }, { data: categories, error: categoryError }, { data: products, error: productError }, { data: inventoryItems, error: inventoryError }, { count: openShifts, error: shiftError }] = await Promise.all([
       admin.from('terminals').select('id, name, code, is_active, created_at').eq('store_id', store.id).order('created_at'),
       admin.from('menu_categories').select('id, name, display_order, is_active').eq('store_id', store.id).order('display_order'),
-      admin.from('products').select('id, category_id, name, sku, base_price, requires_flavor, is_available, is_active, updated_at, product_modifiers (modifier:modifiers (id, name, modifier_type, is_active))').eq('store_id', store.id).eq('is_active', true).order('name'),
+      admin.from('products').select('id, category_id, name, sku, base_price, requires_flavor, is_available, is_active, updated_at, product_modifiers (modifier:modifiers (id, name, modifier_type, is_active)), product_recipes (inventory_item_id, quantity_required, inventory_item:inventory_items (id, name, unit, is_active))').eq('store_id', store.id).eq('is_active', true).order('name'),
+      admin.from('inventory_items').select('id, name, unit, is_active').eq('store_id', store.id).eq('is_active', true).order('name'),
       admin.from('shifts').select('id', { count: 'exact', head: true }).eq('store_id', store.id).eq('status', 'open')
     ])
-    const dataError = terminalError || categoryError || productError || shiftError
+    const dataError = terminalError || categoryError || productError || inventoryError || shiftError
     if (dataError) return res.status(400).json({ error: dataError.message })
 
     const assigned = req.profile.permissions || []
@@ -57,13 +64,14 @@ settingsRouter.get('/', allowAnyPermission('settings.store', 'settings.terminals
     if (can('settings.menu')) {
       response.categories = categories
       response.products = products.map((product) => ({ ...product, category: categoryMap.get(product.category_id) || null }))
+      response.inventoryItems = inventoryItems
     }
     if (can('settings.operations')) response.operations = {
         salesChannels: ['Dine-in', 'Takeout', 'Store delivery', 'GrabFood'],
         timezone: store.timezone,
         currency: store.currency_code,
         managerApproval: ['Discount override', 'Order void', 'Refund'],
-        inventoryDeduction: 'On completed sale',
+        inventoryDeduction: 'Strictly at order confirmation',
         openShifts: openShifts || 0
       }
     if (can('settings.system')) response.system = { api: 'Connected', database: 'Connected', authentication: 'Supabase Auth', environment: process.env.NODE_ENV === 'production' ? 'Production' : 'Development' }
@@ -182,6 +190,41 @@ settingsRouter.post('/products', allowPermission('settings.menu', 'owner_admin')
 
     await admin.from('audit_logs').insert({ store_id: store.id, actor_id: req.user.id, action: 'settings.product_created', entity_type: 'product', entity_id: product.id, metadata: { name: product.name, sku: product.sku, category: category.name, base_price: product.base_price } })
     return res.status(201).json({ product: { ...product, category } })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+settingsRouter.patch('/products/:id/recipe', allowPermission('settings.menu', 'owner_admin'), async (req, res, next) => {
+  const parsed = recipeSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Add at least one ingredient with a quantity greater than zero.' })
+
+  try {
+    const admin = createAdminClient()
+    const components = parsed.data.components.map((component) => ({
+      inventory_item_id: component.inventoryItemId,
+      quantity_required: component.quantityRequired
+    }))
+    const { error } = await admin.rpc('replace_product_recipe', {
+      target_product_id: req.params.id,
+      components
+    })
+    if (error) return res.status(400).json({ error: error.message })
+
+    const { data: recipe, error: recipeError } = await admin
+      .from('product_recipes')
+      .select('inventory_item_id, quantity_required, inventory_item:inventory_items (id, name, unit, is_active)')
+      .eq('product_id', req.params.id)
+    if (recipeError) return res.status(400).json({ error: recipeError.message })
+
+    await admin.from('audit_logs').insert({
+      actor_id: req.user.id,
+      action: 'settings.product_recipe_updated',
+      entity_type: 'product',
+      entity_id: req.params.id,
+      metadata: { components }
+    })
+    return res.json({ recipe })
   } catch (error) {
     return next(error)
   }
