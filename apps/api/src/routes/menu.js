@@ -18,6 +18,7 @@ menuRouter.get('/', allowPermission('pos', 'owner_admin', 'manager', 'cashier'),
           base_price,
           requires_flavor,
           is_available,
+          product_recipes (inventory_item_id),
           product_channel_prices (channel, price),
           product_modifiers (
             is_required,

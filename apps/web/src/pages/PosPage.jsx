@@ -107,7 +107,7 @@ export function PosPage({ accessToken }) {
   const menuItems = useMemo(() => menuCategories.flatMap((entry) => (entry.products || []).filter((product) => product.is_available).map((product) => {
     const channelPrice = product.product_channel_prices?.find((price) => price.channel === channelValues[channel])
     const flavors = (product.product_modifiers || []).filter((link) => link.modifier?.is_active && link.modifier.modifier_type === 'flavor').map((link) => ({ id: link.modifier.id, name: link.modifier.name, priceDelta: Number(link.modifier.price_delta || 0) }))
-    return { id: product.id, name: product.name, category: entry.name, price: Number(channelPrice?.price ?? product.base_price), requiresFlavor: product.requires_flavor, flavors }
+    return { id: product.id, name: product.name, category: entry.name, price: Number(channelPrice?.price ?? product.base_price), requiresFlavor: product.requires_flavor, flavors, recipeConfigured: Boolean(product.product_recipes?.length) }
   })), [menuCategories, channel])
   const items = useMemo(() => menuItems.filter((item) => {
     const matchesCategory = category === 'All' || item.category === category
@@ -203,9 +203,10 @@ export function PosPage({ accessToken }) {
 
         <div className="menu-grid">
           {menuLoading ? <div className="pos-menu-state"><div className="spinner" /><span>Loading menu...</span></div> : menuError ? <div className="pos-menu-state"><ShoppingCart size={28} /><strong>Menu unavailable</strong><span>{menuError}</span><button className="secondary-button" type="button" onClick={loadMenu}>Try again</button></div> : items.length ? items.map((item) => (
-            <button className="menu-item" key={item.id} onClick={() => chooseItem(item)}>
+            <button className="menu-item" key={item.id} onClick={() => chooseItem(item)} disabled={!item.recipeConfigured} title={!item.recipeConfigured ? 'Configure this product recipe in Settings before selling it.' : ''}>
               <span className="menu-item__category">{item.category}</span>
               <strong>{item.name}</strong>
+              {!item.recipeConfigured && <small>Recipe required</small>}
               <b>₱{item.price.toFixed(2)}</b>
             </button>
           )) : <div className="pos-menu-state"><ShoppingCart size={28} /><strong>No menu items found</strong><span>Add products in Settings → Menu management.</span></div>}

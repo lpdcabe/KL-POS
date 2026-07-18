@@ -11,7 +11,7 @@ const completedStatuses = ['served', 'released', 'picked_up', 'delivered', 'comp
 const checkoutSchema = z.object({
   channel: z.enum(['dine_in', 'takeout', 'store_delivery', 'grabfood']),
   items: z.array(z.object({
-    id: z.string().trim().max(100).optional(),
+    id: z.uuid(),
     name: z.string().trim().min(1).max(150),
     price: z.coerce.number().min(0).max(100000),
     quantity: z.coerce.number().int().min(1).max(20),
@@ -31,6 +31,86 @@ const checkoutSchema = z.object({
 
 function dateInManila() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+}
+
+async function prepareOrderItems(admin, storeId, channel, requestedItems) {
+  const productIds = [...new Set(requestedItems.map((item) => item.id))]
+  const { data: products, error: productError } = await admin
+    .from('products')
+    .select('id, store_id, name, base_price, requires_flavor, is_available, is_active, product_channel_prices (channel, price), product_modifiers (modifier:modifiers (id, name, price_delta, is_active))')
+    .eq('store_id', storeId)
+    .in('id', productIds)
+  if (productError) throw productError
+
+  const productMap = new Map((products || []).map((product) => [product.id, product]))
+  const normalized = requestedItems.map((requested) => {
+    const product = productMap.get(requested.id)
+    if (!product?.is_active || !product.is_available) {
+      throw Object.assign(new Error(`${requested.name} is unavailable. Refresh the menu and try again.`), { status: 409 })
+    }
+
+    const modifierMap = new Map((product.product_modifiers || [])
+      .filter((link) => link.modifier?.is_active)
+      .map((link) => [link.modifier.id, link.modifier]))
+    const selectedIds = new Set()
+    const modifiers = requested.modifiers.map((selected) => {
+      if (selectedIds.has(selected.id)) throw Object.assign(new Error('The same modifier cannot be selected twice.'), { status: 400 })
+      selectedIds.add(selected.id)
+      const modifier = modifierMap.get(selected.id)
+      if (!modifier) throw Object.assign(new Error(`A selected option for ${product.name} is unavailable.`), { status: 409 })
+      return { id: modifier.id, name: modifier.name, priceDelta: Number(modifier.price_delta || 0) }
+    })
+    if (product.requires_flavor && !modifiers.length) {
+      throw Object.assign(new Error(`Choose a flavor for ${product.name}.`), { status: 400 })
+    }
+
+    const channelPrice = product.product_channel_prices?.find((entry) => entry.channel === channel)
+    const unitPrice = Number(channelPrice?.price ?? product.base_price)
+      + modifiers.reduce((sum, modifier) => sum + modifier.priceDelta, 0)
+    return { id: product.id, name: product.name, price: unitPrice, quantity: requested.quantity, modifiers }
+  })
+
+  const { data: recipes, error: recipeError } = await admin
+    .from('product_recipes')
+    .select('product_id, inventory_item_id, quantity_required')
+    .in('product_id', productIds)
+  if (recipeError) throw recipeError
+  const recipesByProduct = new Map()
+  for (const recipe of recipes || []) {
+    const entries = recipesByProduct.get(recipe.product_id) || []
+    entries.push(recipe)
+    recipesByProduct.set(recipe.product_id, entries)
+  }
+
+  const requiredByIngredient = new Map()
+  for (const item of normalized) {
+    const productRecipes = recipesByProduct.get(item.id) || []
+    if (!productRecipes.length) {
+      throw Object.assign(new Error(`Recipe required for "${item.name}" before it can be sold.`), { status: 409 })
+    }
+    for (const recipe of productRecipes) {
+      requiredByIngredient.set(recipe.inventory_item_id, (requiredByIngredient.get(recipe.inventory_item_id) || 0) + item.quantity * Number(recipe.quantity_required))
+    }
+  }
+
+  const ingredientIds = [...requiredByIngredient.keys()]
+  const { data: inventory, error: inventoryError } = await admin
+    .from('inventory_items')
+    .select('id, store_id, name, unit, quantity_on_hand, is_active')
+    .in('id', ingredientIds)
+  if (inventoryError) throw inventoryError
+  const inventoryMap = new Map((inventory || []).map((item) => [item.id, item]))
+  for (const [ingredientId, required] of requiredByIngredient) {
+    const item = inventoryMap.get(ingredientId)
+    if (!item?.is_active || item.store_id !== storeId) {
+      throw Object.assign(new Error('A recipe ingredient is unavailable. Update the product recipe before checkout.'), { status: 409 })
+    }
+    if (Number(item.quantity_on_hand) < required) {
+      throw Object.assign(new Error(`${item.name} requires ${required} ${item.unit}, but only ${Number(item.quantity_on_hand)} ${item.unit} is available.`), { status: 409 })
+    }
+  }
+
+  return normalized
 }
 
 export const ordersRouter = Router()
@@ -53,14 +133,15 @@ ordersRouter.post('/', allowPermission('pos', 'owner_admin', 'manager', 'cashier
     }
     if (!allowedMethods[input.channel].includes(input.paymentMethod)) return res.status(400).json({ error: 'Choose a payment method available for this sales channel.' })
 
-    const subtotal = Number(input.items.reduce((sum, item) => sum + item.price * item.quantity, 0).toFixed(2))
-    if (subtotal <= 0) return res.status(400).json({ error: 'The order total must be greater than zero.' })
-    if (input.paymentMethod === 'cash' && Number(input.tenderedAmount || 0) < subtotal) return res.status(400).json({ error: 'The cash received is less than the order total.' })
-
     const admin = createAdminClient()
     const { data: store, error: storeError } = await admin.from('stores').select('id').eq('is_active', true).order('created_at').limit(1).maybeSingle()
     if (storeError) throw storeError
     if (!store) return res.status(404).json({ error: 'No active store is configured.' })
+
+    const items = await prepareOrderItems(admin, store.id, input.channel, input.items)
+    const subtotal = Number(items.reduce((sum, item) => sum + item.price * item.quantity, 0).toFixed(2))
+    if (subtotal <= 0) return res.status(400).json({ error: 'The order total must be greater than zero.' })
+    if (input.paymentMethod === 'cash' && Number(input.tenderedAmount || 0) < subtotal) return res.status(400).json({ error: 'The cash received is less than the order total.' })
 
     const now = new Date().toISOString()
     const { data: order, error: orderError } = await admin.from('orders').insert({
@@ -85,9 +166,9 @@ ordersRouter.post('/', allowPermission('pos', 'owner_admin', 'manager', 'cashier
       return res.status(500).json({ error: message })
     }
 
-    const { data: savedItems, error: itemError } = await admin.from('order_items').insert(input.items.map((item) => ({
+    const { data: savedItems, error: itemError } = await admin.from('order_items').insert(items.map((item) => ({
       order_id: order.id,
-      product_id: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.id || '') ? item.id : null,
+      product_id: item.id,
       product_name: item.name,
       sku: item.id || null,
       quantity: item.quantity,
@@ -96,7 +177,7 @@ ordersRouter.post('/', allowPermission('pos', 'owner_admin', 'manager', 'cashier
     }))).select('id')
     if (itemError) return failOrder('The order items could not be saved.')
 
-    const savedModifiers = input.items.flatMap((item, index) => item.modifiers.map((modifier) => ({ order_item_id: savedItems[index].id, modifier_id: modifier.id, modifier_name: modifier.name, price_delta: modifier.priceDelta, quantity: 1 })))
+    const savedModifiers = items.flatMap((item, index) => item.modifiers.map((modifier) => ({ order_item_id: savedItems[index].id, modifier_id: modifier.id, modifier_name: modifier.name, price_delta: modifier.priceDelta, quantity: 1 })))
     if (savedModifiers.length) {
       const { error: modifierError } = await admin.from('order_item_modifiers').insert(savedModifiers)
       if (modifierError) return failOrder('The selected flavors could not be saved.')

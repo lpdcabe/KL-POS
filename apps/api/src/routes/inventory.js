@@ -9,6 +9,19 @@ const itemSchema = z.object({
   unit: z.string().trim().min(1).max(20),
   quantityOnHand: z.coerce.number().min(0).max(999999).default(0),
   reorderLevel: z.coerce.number().min(0).max(999999).default(0)
+}).superRefine((value, context) => {
+  if (['pc', 'pcs', 'piece', 'pieces'].includes(value.unit.toLowerCase())) {
+    if (!Number.isInteger(value.quantityOnHand)) context.addIssue({ code: 'custom', path: ['quantityOnHand'], message: 'Piece stock must be a whole number.' })
+    if (!Number.isInteger(value.reorderLevel)) context.addIssue({ code: 'custom', path: ['reorderLevel'], message: 'Piece reorder levels must be whole numbers.' })
+  }
+})
+
+const trackingSchema = z.object({
+  unit: z.enum(['pcs']),
+  quantityOnHand: z.coerce.number().int().positive().max(999999),
+  reorderLevel: z.coerce.number().int().min(0).max(999999),
+  secondaryUnit: z.enum(['kg']),
+  secondaryQuantityOnHand: z.coerce.number().positive().max(999999)
 })
 
 const movementSchema = z.object({
@@ -31,7 +44,7 @@ inventoryRouter.get('/', allowPermission('inventory', 'owner_admin', 'manager', 
     const store = await activeStore(admin)
     if (!store) return res.status(404).json({ error: 'No active store is configured.' })
 
-    const { data: items, error: itemError } = await admin.from('inventory_items').select('id, sku, name, unit, quantity_on_hand, reorder_level, updated_at').eq('store_id', store.id).eq('is_active', true).order('name')
+    const { data: items, error: itemError } = await admin.from('inventory_items').select('id, sku, name, unit, quantity_on_hand, reorder_level, secondary_unit, secondary_quantity_per_primary, secondary_quantity_on_hand, updated_at').eq('store_id', store.id).eq('is_active', true).order('name')
     if (itemError) return res.status(400).json({ error: itemError.message })
     const lowStock = items.filter((item) => Number(item.quantity_on_hand) <= Number(item.reorder_level)).length
     const outOfStock = items.filter((item) => Number(item.quantity_on_hand) <= 0).length
@@ -63,7 +76,7 @@ inventoryRouter.post('/items', allowPermission('inventory', 'owner_admin', 'mana
       unit: input.unit,
       quantity_on_hand: input.quantityOnHand,
       reorder_level: input.reorderLevel
-    }).select('id, sku, name, unit, quantity_on_hand, reorder_level, updated_at').single()
+    }).select('id, sku, name, unit, quantity_on_hand, reorder_level, secondary_unit, secondary_quantity_per_primary, secondary_quantity_on_hand, updated_at').single()
 
     if (itemError) {
       const message = itemError.code === '23505' ? 'That SKU is already in use.' : itemError.message
@@ -102,6 +115,9 @@ inventoryRouter.patch('/items/:id/movement', allowPermission('inventory', 'owner
     if (itemError || !item?.is_active) return res.status(404).json({ error: 'Inventory item not found.' })
 
     const input = parsed.data
+    if (['pc', 'pcs', 'piece', 'pieces'].includes(item.unit.toLowerCase()) && !Number.isInteger(input.quantity)) {
+      return res.status(400).json({ error: 'Piece-based stock movements must use a whole number.' })
+    }
     const current = Number(item.quantity_on_hand)
     let delta = input.quantity
     if (input.type === 'wastage' || input.type === 'staff_meal') delta = -input.quantity
@@ -115,7 +131,7 @@ inventoryRouter.patch('/items/:id/movement', allowPermission('inventory', 'owner
       .update({ quantity_on_hand: nextQuantity })
       .eq('id', item.id)
       .eq('quantity_on_hand', item.quantity_on_hand)
-      .select('id, sku, name, unit, quantity_on_hand, reorder_level, updated_at')
+      .select('id, sku, name, unit, quantity_on_hand, reorder_level, secondary_unit, secondary_quantity_per_primary, secondary_quantity_on_hand, updated_at')
       .maybeSingle()
 
     if (updateError) return res.status(400).json({ error: updateError.message })
@@ -137,6 +153,45 @@ inventoryRouter.patch('/items/:id/movement', allowPermission('inventory', 'owner
 
     await admin.from('audit_logs').insert({ store_id: item.store_id, actor_id: req.user.id, action: 'inventory.stock_changed', entity_type: 'inventory_item', entity_id: item.id, metadata: { movement_type: input.type, quantity_delta: delta, previous_quantity: current, new_quantity: nextQuantity, reason: input.reason } })
     return res.json({ item: updated, movement })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+inventoryRouter.patch('/items/:id/tracking', allowPermission('inventory', 'owner_admin', 'manager'), allowRoles('owner_admin', 'manager'), async (req, res, next) => {
+  const parsed = trackingSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Enter whole pieces, total kilograms, and a valid low-stock piece level.' })
+
+  try {
+    const admin = createAdminClient()
+    const { data: item, error: itemError } = await admin.from('inventory_items').select('id, store_id, name, unit, quantity_on_hand, is_active').eq('id', req.params.id).maybeSingle()
+    if (itemError || !item?.is_active) return res.status(404).json({ error: 'Inventory item not found.' })
+
+    const input = parsed.data
+    const conversion = Number((input.secondaryQuantityOnHand / input.quantityOnHand).toFixed(6))
+    if (conversion <= 0) return res.status(400).json({ error: 'The kilograms per piece conversion must be greater than zero.' })
+
+    const { data: updated, error: updateError } = await admin.from('inventory_items').update({
+      unit: input.unit,
+      quantity_on_hand: input.quantityOnHand,
+      reorder_level: input.reorderLevel,
+      secondary_unit: input.secondaryUnit,
+      secondary_quantity_per_primary: conversion
+    }).eq('id', item.id).select('id, sku, name, unit, quantity_on_hand, reorder_level, secondary_unit, secondary_quantity_per_primary, secondary_quantity_on_hand, updated_at').single()
+    if (updateError) return res.status(400).json({ error: updateError.message })
+
+    await admin.from('audit_logs').insert({
+      store_id: item.store_id,
+      actor_id: req.user.id,
+      action: 'inventory.tracking_units_changed',
+      entity_type: 'inventory_item',
+      entity_id: item.id,
+      metadata: {
+        previous: { unit: item.unit, quantity_on_hand: item.quantity_on_hand },
+        current: { unit: input.unit, quantity_on_hand: input.quantityOnHand, secondary_unit: input.secondaryUnit, secondary_quantity_on_hand: input.secondaryQuantityOnHand, secondary_quantity_per_primary: conversion }
+      }
+    })
+    return res.json({ item: updated })
   } catch (error) {
     return next(error)
   }

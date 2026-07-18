@@ -49,7 +49,7 @@ settingsRouter.get('/', allowAnyPermission('settings.store', 'settings.terminals
       admin.from('terminals').select('id, name, code, is_active, created_at').eq('store_id', store.id).order('created_at'),
       admin.from('menu_categories').select('id, name, display_order, is_active').eq('store_id', store.id).order('display_order'),
       admin.from('products').select('id, category_id, name, sku, base_price, requires_flavor, is_available, is_active, updated_at, product_modifiers (modifier:modifiers (id, name, modifier_type, is_active)), product_recipes (inventory_item_id, quantity_required, inventory_item:inventory_items (id, name, unit, is_active))').eq('store_id', store.id).eq('is_active', true).order('name'),
-      admin.from('inventory_items').select('id, name, unit, is_active').eq('store_id', store.id).eq('is_active', true).order('name'),
+      admin.from('inventory_items').select('id, name, unit, secondary_unit, secondary_quantity_per_primary, is_active').eq('store_id', store.id).eq('is_active', true).order('name'),
       admin.from('shifts').select('id', { count: 'exact', head: true }).eq('store_id', store.id).eq('status', 'open')
     ])
     const dataError = terminalError || categoryError || productError || inventoryError || shiftError
