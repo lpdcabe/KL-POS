@@ -1,0 +1,26 @@
+{
+  "name": "kl-chicken-wings-pos",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n WEB,API -c cyan,yellow \"npm run dev -w @klcw/web\" \"npm run dev -w @klcw/api\"",
+    "dev:web": "npm run dev -w @klcw/web",
+    "dev:api": "npm run dev -w @klcw/api",
+    "build": "npm run build -w @klcw/web",
+    "test": "npm run test -w @klcw/api && npm run test -w @klcw/web",
+    "lint": "npm run lint -w @klcw/api && npm run lint -w @klcw/web"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "concurrently": "10.0.3",
+    "eslint": "10.7.0",
+    "globals": "17.7.0"
+  }
+}
