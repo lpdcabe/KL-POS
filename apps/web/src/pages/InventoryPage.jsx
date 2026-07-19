@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Boxes, ClipboardClock, PackagePlus, Scale, Search, ShieldCheck, TrendingDown, X } from 'lucide-react'
 import { apiRequest } from '../lib/api.js'
+import { useSearchParams } from 'react-router-dom'
 
 const movementLabels = {
   receiving: 'Receiving',
@@ -31,7 +32,7 @@ function secondaryStock(item, primaryQuantity = item.quantity_on_hand) {
 }
 
 function InventoryModal({ mode, items, initialItem, submitting, onClose, onSubmit }) {
-  const [itemForm, setItemForm] = useState({ name: '', sku: '', unit: 'kg', quantityOnHand: 0, reorderLevel: 0 })
+  const [itemForm, setItemForm] = useState({ name: '', sku: '', unit: 'pcs', quantityOnHand: 0, reorderLevel: 0 })
   const [movementForm, setMovementForm] = useState({ itemId: initialItem?.id || items[0]?.id || '', type: 'receiving', quantity: '', reason: '' })
   const [trackingForm, setTrackingForm] = useState({
     unit: 'pcs',
@@ -50,18 +51,18 @@ function InventoryModal({ mode, items, initialItem, submitting, onClose, onSubmi
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <section className="employee-modal inventory-modal" role="dialog" aria-modal="true">
-        <header><div><span className="eyebrow">Inventory control</span><h2>{mode === 'item' ? 'Add inventory item' : mode === 'tracking' ? 'Piece and kilogram tracking' : 'Record stock movement'}</h2><p>{mode === 'item' ? 'Create an ingredient, supply, or packaging item.' : mode === 'tracking' ? `Configure ${initialItem.name} with pieces as the strict unit and kilograms as the converted unit.` : 'Update stock and keep an auditable reason.'}</p></div><button className="icon-button" type="button" onClick={onClose} aria-label="Close"><X size={19} /></button></header>
+        <header><div><span className="eyebrow">Inventory control</span><h2>{mode === 'item' ? 'Add inventory item' : mode === 'tracking' ? `Count ${initialItem.name} by piece` : 'Record stock movement'}</h2><p>{mode === 'item' ? 'Create an ingredient, supply, or packaging item.' : mode === 'tracking' ? 'Enter what you physically have now. We will calculate the weight per piece for you.' : 'Update stock and keep an auditable reason.'}</p></div><button className="icon-button" type="button" onClick={onClose} aria-label="Close"><X size={19} /></button></header>
         <form onSubmit={submit}>
           {mode === 'item' ? <div className="employee-form-grid">
             <label className="employee-form-grid__wide"><span>Item name</span><input value={itemForm.name} onChange={(event) => setItemForm({ ...itemForm, name: event.target.value })} placeholder="e.g. Chicken wings" required minLength={2} /></label>
             <label><span>SKU (optional)</span><input value={itemForm.sku} onChange={(event) => setItemForm({ ...itemForm, sku: event.target.value })} placeholder="RAW-001" /></label>
-            <label><span>Unit</span><input value={itemForm.unit} onChange={(event) => setItemForm({ ...itemForm, unit: event.target.value })} placeholder="kg, bottle, piece" required /></label>
-            <label><span>Opening stock</span><input type="number" min="0" step="0.001" value={itemForm.quantityOnHand} onChange={(event) => setItemForm({ ...itemForm, quantityOnHand: event.target.value })} required /></label>
-            <label><span>Low-stock level</span><input type="number" min="0" step="0.001" value={itemForm.reorderLevel} onChange={(event) => setItemForm({ ...itemForm, reorderLevel: event.target.value })} required /></label>
+            <label><span>How do you count it?</span><select value={itemForm.unit} onChange={(event) => setItemForm({ ...itemForm, unit: event.target.value })}><option value="pcs">Pieces (pcs)</option><option value="kg">Weight (kg)</option><option value="bottle">Bottles</option><option value="pack">Packs</option><option value="liter">Liters</option></select></label>
+            <label><span>How many do you have now?</span><input type="number" min="0" step={itemForm.unit === 'pcs' ? '1' : '0.001'} value={itemForm.quantityOnHand} onChange={(event) => setItemForm({ ...itemForm, quantityOnHand: event.target.value })} required /></label>
+            <label><span>Warn me when stock reaches</span><input type="number" min="0" step={itemForm.unit === 'pcs' ? '1' : '0.001'} value={itemForm.reorderLevel} onChange={(event) => setItemForm({ ...itemForm, reorderLevel: event.target.value })} required /></label>
           </div> : mode === 'tracking' ? <div className="employee-form-grid">
-            <label><span>Current pieces</span><input type="number" min="1" step="1" value={trackingForm.quantityOnHand} onChange={(event) => setTrackingForm({ ...trackingForm, quantityOnHand: event.target.value })} placeholder="e.g. 800" required /></label>
-            <label><span>Current total weight</span><div className="unit-input"><input type="number" min="0.001" step="0.001" value={trackingForm.secondaryQuantityOnHand} onChange={(event) => setTrackingForm({ ...trackingForm, secondaryQuantityOnHand: event.target.value })} placeholder="e.g. 80" required /><b>kg</b></div></label>
-            <label><span>Low-stock level</span><div className="unit-input"><input type="number" min="0" step="1" value={trackingForm.reorderLevel} onChange={(event) => setTrackingForm({ ...trackingForm, reorderLevel: event.target.value })} placeholder="e.g. 100" required /><b>pcs</b></div></label>
+            <label><span>1. Count the pieces you have now</span><input type="number" min="1" step="1" value={trackingForm.quantityOnHand} onChange={(event) => setTrackingForm({ ...trackingForm, quantityOnHand: event.target.value })} placeholder="Example: 80" required /></label>
+            <label><span>2. Their total weight</span><div className="unit-input"><input type="number" min="0.001" step="0.001" value={trackingForm.secondaryQuantityOnHand} onChange={(event) => setTrackingForm({ ...trackingForm, secondaryQuantityOnHand: event.target.value })} placeholder="Example: 8" required /><b>kg</b></div></label>
+            <label><span>3. Warn me when only</span><div className="unit-input"><input type="number" min="0" step="1" value={trackingForm.reorderLevel} onChange={(event) => setTrackingForm({ ...trackingForm, reorderLevel: event.target.value })} placeholder="Example: 20" required /><b>pcs</b></div></label>
             <div className="tracking-conversion"><Scale size={18} /><div><strong>Calculated average</strong><span>{Number(trackingForm.quantityOnHand) > 0 && Number(trackingForm.secondaryQuantityOnHand) > 0 ? `${quantity(Number(trackingForm.secondaryQuantityOnHand) / Number(trackingForm.quantityOnHand))} kg per piece` : 'Enter pieces and total kg to calculate.'}</span></div></div>
             <div className="tracking-warning employee-form-grid__wide"><ShieldCheck size={18} /><span>This replaces the current kg-only stock with the physical piece count you enter. Future sales and movements use whole pieces; kilograms are calculated automatically.</span></div>
           </div> : <div className="employee-form-grid">
@@ -70,7 +71,7 @@ function InventoryModal({ mode, items, initialItem, submitting, onClose, onSubmi
             <label><span>{isCount ? 'Counted quantity' : 'Quantity'}</span><input type="number" min={isCount ? '0' : '0.001'} step="0.001" value={movementForm.quantity} onChange={(event) => setMovementForm({ ...movementForm, quantity: event.target.value })} required /></label>
             <label className="employee-form-grid__wide"><span>Reason / reference</span><textarea value={movementForm.reason} onChange={(event) => setMovementForm({ ...movementForm, reason: event.target.value })} placeholder={isCount ? 'Physical stock count' : 'Supplier, receipt, or explanation'} required minLength={2} /></label>
           </div>}
-          <div className="employee-modal__actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit" disabled={submitting}>{submitting ? 'Saving...' : mode === 'item' ? 'Add item' : mode === 'tracking' ? 'Save dual tracking' : 'Record movement'}</button></div>
+          <div className="employee-modal__actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit" disabled={submitting}>{submitting ? 'Saving...' : mode === 'item' ? 'Add item' : mode === 'tracking' ? 'Use pieces' : 'Record movement'}</button></div>
         </form>
       </section>
     </div>
@@ -78,6 +79,7 @@ function InventoryModal({ mode, items, initialItem, submitting, onClose, onSubmi
 }
 
 export function InventoryPage({ accessToken, profile }) {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [items, setItems] = useState([])
   const [summary, setSummary] = useState({ totalItems: 0, lowStock: 0, outOfStock: 0 })
   const [loading, setLoading] = useState(true)
@@ -104,6 +106,13 @@ export function InventoryPage({ accessToken, profile }) {
   }, [accessToken])
 
   useEffect(() => { loadInventory() }, [loadInventory])
+  useEffect(() => {
+    const itemId = searchParams.get('setupPieces')
+    const item = items.find((entry) => entry.id === itemId)
+    if (!item || !canManage) return
+    setModal({ mode: 'tracking', item })
+    setSearchParams({}, { replace: true })
+  }, [canManage, items, searchParams, setSearchParams])
 
   const visibleItems = useMemo(() => items.filter((item) => {
     const matchesSearch = `${item.name} ${item.sku || ''}`.toLowerCase().includes(search.trim().toLowerCase())
@@ -143,7 +152,7 @@ export function InventoryPage({ accessToken, profile }) {
     try {
       await apiRequest(`/api/inventory/items/${modal.item.id}/tracking`, { accessToken, method: 'PATCH', body: JSON.stringify(form) })
       setModal(null)
-      setSuccess('Piece and kilogram tracking configured.')
+      setSuccess(`${modal.item.name} is now counted in pieces. Return to its menu recipe and enter the pieces used per order.`)
       setError('')
       await loadInventory()
     } catch (requestError) {
