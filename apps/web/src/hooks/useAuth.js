@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { apiRequest } from '../lib/api.js'
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js'
 
+const profileCacheKey = 'kl-pos-profile'
+
 export function useAuth() {
   const [session, setSession] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -25,9 +27,14 @@ export function useAuth() {
 
       try {
         const result = await apiRequest('/api/me', { accessToken: nextSession.access_token })
+        localStorage.setItem(profileCacheKey, JSON.stringify(result.profile))
         if (active) setProfile(result.profile)
       } catch (requestError) {
-        if (active) setError(requestError.message)
+        const cachedProfile = JSON.parse(localStorage.getItem(profileCacheKey) || 'null')
+        if (active && requestError.isNetworkError && cachedProfile?.id === nextSession.user.id) {
+          setProfile(cachedProfile)
+          setError('Offline mode: using the saved cashier profile.')
+        } else if (active) setError(requestError.message)
       } finally {
         if (active) setLoading(false)
       }
@@ -51,6 +58,7 @@ export function useAuth() {
   }
 
   async function signOut() {
+    localStorage.removeItem(profileCacheKey)
     await supabase?.auth.signOut()
   }
 

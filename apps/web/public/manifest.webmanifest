@@ -1,0 +1,35 @@
+{
+  "name": "KL Chicken Wings POS",
+  "short_name": "KL POS",
+  "description": "Point of sale and store operations for KL Chicken Wings",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#fffdf9",
+  "theme_color": "#9d1d20",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/assets/kl-monogram-layered.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New order",
+      "short_name": "New order",
+      "url": "/pos",
+      "icons": [{ "src": "/assets/kl-monogram-layered.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Kitchen",
+      "short_name": "Kitchen",
+      "url": "/kitchen",
+      "icons": [{ "src": "/assets/kl-monogram-layered.svg", "sizes": "any", "type": "image/svg+xml" }]
+    }
+  ]
+}

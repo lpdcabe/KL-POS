@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, CreditCard, Minus, Plus, Search, ShoppingCart, Trash2, X } from 'lucide-react'
+import { CheckCircle2, Cloud, CreditCard, Minus, Plus, Search, ShoppingCart, Trash2, WifiOff, X } from 'lucide-react'
 import { apiRequest } from '../lib/api.js'
+import { cacheMenu, getCachedMenu, getPendingOrders, queueOfflineOrder, removePendingOrder, updatePendingOrder } from '../lib/offlinePos.js'
 
 const channels = ['Dine-in', 'Takeout', 'Store delivery', 'GrabFood']
 const maxItemQuantity = 20
@@ -24,13 +25,14 @@ function FlavorModal({ item, onClose, onAdd }) {
 
 function CheckoutModal({ channel, cart, total, form, onChange, onClose, onSubmit, submitting, error, completedOrder, onDone }) {
   if (completedOrder) {
+    const offline = completedOrder.offline
     return (
       <div className="modal-backdrop">
         <section className="checkout-modal checkout-success" role="dialog" aria-modal="true" aria-labelledby="checkout-success-title">
           <CheckCircle2 size={48} />
-          <span className="eyebrow">Payment recorded</span>
-          <h2 id="checkout-success-title">Order #{completedOrder.order_number} confirmed</h2>
-          <p>The order was sent to the kitchen and is now available in order history.</p>
+          <span className="eyebrow">{offline ? 'Saved on this tablet' : 'Payment recorded'}</span>
+          <h2 id="checkout-success-title">{offline ? `Offline sale ${completedOrder.reference}` : `Order #${completedOrder.order_number} confirmed`}</h2>
+          <p>{offline ? 'The cash sale is safely queued and will be sent to the server when Wi-Fi returns. Tell the kitchen manually while offline.' : 'The order was sent to the kitchen and is now available in order history.'}</p>
           <div><span>Total paid</span><strong>{money(completedOrder.total)}</strong></div>
           {completedOrder.change > 0 && <div><span>Cash change</span><strong>{money(completedOrder.change)}</strong></div>}
           <button className="primary-button" type="button" onClick={onDone}>Start a new order</button>
@@ -87,21 +89,74 @@ export function PosPage({ accessToken }) {
   const [menuError, setMenuError] = useState('')
   const [cartNotice, setCartNotice] = useState('')
   const [flavorItem, setFlavorItem] = useState(null)
+  const [isOnline, setIsOnline] = useState(navigator.onLine)
+  const [pendingCount, setPendingCount] = useState(0)
+  const [syncMessage, setSyncMessage] = useState('')
+
+  const refreshPendingCount = useCallback(async () => {
+    const pending = await getPendingOrders()
+    setPendingCount(pending.length)
+    return pending
+  }, [])
+
+  const syncPendingOrders = useCallback(async () => {
+    if (!navigator.onLine) return
+    const pending = await getPendingOrders()
+    if (!pending.length) {
+      setPendingCount(0)
+      return
+    }
+    setSyncMessage(`Syncing ${pending.length} offline sale${pending.length === 1 ? '' : 's'}...`)
+    let synced = 0
+    for (const queued of pending) {
+      try {
+        await apiRequest('/api/orders', { accessToken, method: 'POST', body: JSON.stringify(queued.payload) })
+        await removePendingOrder(queued.clientOrderId)
+        synced += 1
+      } catch (requestError) {
+        if (requestError.isNetworkError) break
+        await updatePendingOrder({ ...queued, syncError: requestError.message })
+      }
+    }
+    const remaining = await getPendingOrders()
+    setPendingCount(remaining.length)
+    setSyncMessage(remaining.length ? `${remaining.length} sale${remaining.length === 1 ? '' : 's'} still need attention.` : `${synced} offline sale${synced === 1 ? '' : 's'} synced.`)
+  }, [accessToken])
 
   const loadMenu = useCallback(async () => {
     setMenuLoading(true)
     try {
       const result = await apiRequest('/api/menu', { accessToken })
       setMenuCategories(result.categories || [])
+      await cacheMenu(result.categories || []).catch(() => undefined)
       setMenuError('')
     } catch (requestError) {
-      setMenuError(requestError.message)
+      const cached = await getCachedMenu().catch(() => null)
+      if (cached?.categories?.length) {
+        setMenuCategories(cached.categories)
+        setMenuError('')
+      } else setMenuError(requestError.message)
     } finally {
       setMenuLoading(false)
     }
   }, [accessToken])
 
   useEffect(() => { loadMenu() }, [loadMenu])
+  useEffect(() => {
+    refreshPendingCount()
+    function handleOnline() {
+      setIsOnline(true)
+      syncPendingOrders()
+    }
+    function handleOffline() { setIsOnline(false) }
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    if (navigator.onLine) syncPendingOrders()
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [refreshPendingCount, syncPendingOrders])
 
   const categories = useMemo(() => ['All', ...menuCategories.map((entry) => entry.name)], [menuCategories])
   const menuItems = useMemo(() => menuCategories.flatMap((entry) => (entry.products || []).filter((product) => product.is_available).map((product) => {
@@ -164,16 +219,25 @@ export function PosPage({ accessToken }) {
     event.preventDefault()
     setSubmitting(true)
     setCheckoutError('')
+    const payload = { ...checkoutForm, clientOrderId: crypto.randomUUID(), channel: channelValues[channel], items: cart.map((item) => ({ id: item.id, name: item.name, price: item.price, quantity: item.quantity, modifiers: item.modifiers || [] })) }
+    const canQueueOffline = ['cash', 'store_delivery_cod'].includes(payload.paymentMethod)
     try {
       const result = await apiRequest('/api/orders', {
         accessToken,
         method: 'POST',
-        body: JSON.stringify({ ...checkoutForm, channel: channelValues[channel], items: cart.map((item) => ({ id: item.id, name: item.name, price: item.price, quantity: item.quantity, modifiers: item.modifiers || [] })) })
+        body: JSON.stringify(payload)
       })
       setCompletedOrder(result.order)
       setCart([])
     } catch (requestError) {
-      setCheckoutError(requestError.message)
+      if (requestError.isNetworkError && canQueueOffline) {
+        await queueOfflineOrder(payload, subtotal)
+        await refreshPendingCount()
+        setCompletedOrder({ offline: true, reference: payload.clientOrderId.slice(0, 8).toUpperCase(), total: subtotal, change: payload.paymentMethod === 'cash' ? Math.max(0, Number(payload.tenderedAmount || 0) - subtotal) : 0 })
+        setCart([])
+      } else if (requestError.isNetworkError) {
+        setCheckoutError('Offline checkout supports Cash and Cash on delivery only. Choose a cash method or reconnect to Wi-Fi.')
+      } else setCheckoutError(requestError.message)
     } finally {
       setSubmitting(false)
     }
@@ -188,6 +252,13 @@ export function PosPage({ accessToken }) {
   return (
     <div className="pos-layout">
       <section className="pos-catalog">
+        <div className={`offline-status ${isOnline ? 'offline-status--online' : 'offline-status--offline'}`}>
+          {isOnline ? <Cloud size={16} /> : <WifiOff size={16} />}
+          <span>{isOnline ? 'Online' : 'Offline cashier mode'}</span>
+          {pendingCount > 0 && <strong>{pendingCount} pending sync</strong>}
+          {isOnline && pendingCount > 0 && <button type="button" onClick={syncPendingOrders}>Sync now</button>}
+        </div>
+        {syncMessage && <div className="pos-sync-message">{syncMessage}</div>}
         <header className="pos-header">
           <div><span className="eyebrow">New order</span><h1>Build the order</h1></div>
           <div className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search the menu" /></div>

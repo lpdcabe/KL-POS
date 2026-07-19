@@ -30,9 +30,21 @@ export async function apiRequest(path, { accessToken, ...options } = {}) {
   headers.set('Content-Type', 'application/json')
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
 
-  const response = await fetch(`${apiUrl}${path}`, { ...options, headers })
+  let response
+  try {
+    response = await fetch(`${apiUrl}${path}`, { ...options, headers })
+  } catch (error) {
+    const networkError = new Error('No connection to the POS server.')
+    networkError.isNetworkError = true
+    networkError.cause = error
+    throw networkError
+  }
   const body = await response.json().catch(() => ({}))
 
-  if (!response.ok) throw new Error(body.error || 'The request failed.')
+  if (!response.ok) {
+    const requestError = new Error(body.error || 'The request failed.')
+    requestError.status = response.status
+    throw requestError
+  }
   return body
 }

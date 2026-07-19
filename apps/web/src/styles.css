@@ -113,6 +113,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .workspace-header__actions { display: flex; align-items: center; gap: 12px; }
 .workspace-filter-button { min-height: 40px; padding: 0 15px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid #e4c8c4; border-radius: 11px; color: var(--wine); background: #f8ebe8; font-size: .75rem; font-weight: 800; transition: 160ms ease; }
 .workspace-filter-button:hover { border-color: #dbaea8; background: #f4dfdb; transform: translateY(-1px); }
+.workspace-install-button { min-height: 40px; padding: 0 15px; display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 11px; color: white; background: var(--wine); font-size: .75rem; font-weight: 800; box-shadow: 0 7px 18px rgba(157, 29, 32, .18); }
+.workspace-install-button:hover { background: var(--wine-dark); transform: translateY(-1px); }
 .header-account-menu { position: relative; }
 .workspace-header__user { min-height: 46px; max-width: 280px; padding: 4px 9px 4px 5px; display: flex; align-items: center; gap: 9px; border: 1px solid transparent; color: inherit; background: transparent; text-align: left; border-radius: 13px; transition: 150ms ease; }
 .workspace-header__user:hover, .workspace-header__user[aria-expanded="true"] { border-color: var(--line); background: #f7f0e8; }
@@ -696,6 +698,12 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .pos-layout { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) 390px; }
 .pos-catalog { padding: 34px 34px 50px; }
+.offline-status { min-height: 38px; margin-bottom: 18px; padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-radius: 11px; font-size: .69rem; font-weight: 800; }
+.offline-status--online { color: #286747; border: 1px solid #c8dfd1; background: #edf7f0; }
+.offline-status--offline { color: #7b5211; border: 1px solid #ead29c; background: #fff2cf; }
+.offline-status strong { margin-left: auto; padding: 4px 8px; border-radius: 999px; color: #7b5211; background: #ffe7aa; font-size: .6rem; }
+.offline-status button { padding: 4px 8px; border: 0; border-radius: 7px; color: white; background: var(--wine); font-size: .61rem; font-weight: 800; }
+.pos-sync-message { margin: -9px 0 18px; color: var(--muted); font-size: .65rem; }
 .pos-header { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
 .pos-header h1 { margin: 6px 0 0; font-size: 2.5rem; }
 .checkout-modal { width: min(860px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; border-radius: 22px; background: var(--white); box-shadow: 0 28px 80px rgba(42,24,17,.26); }
@@ -923,6 +931,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .workspace-filter-button { width: 40px; padding: 0; justify-content: center; }
   .workspace-filter-button { font-size: 0; }
   .workspace-filter-button svg { width: 18px; height: 18px; }
+  .workspace-install-button { width: 40px; padding: 0; justify-content: center; font-size: 0; }
   .terminal-grid, .operations-grid, .system-grid { padding: 14px; }
   .settings-panel { min-height: auto; }
   .settings-panel > header { min-height: auto; padding: 18px; }

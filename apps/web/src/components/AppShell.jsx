@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { BarChart3, Bike, ChefHat, ChevronDown, ClipboardCheck, ClipboardList, Funnel, LayoutDashboard, LogOut, PackageOpen, Settings, ShoppingBag, Users } from 'lucide-react'
+import { BarChart3, Bike, ChefHat, ChevronDown, ClipboardCheck, ClipboardList, Download, Funnel, LayoutDashboard, LogOut, PackageOpen, Settings, ShoppingBag, Users } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { BrandMark } from './BrandMark.jsx'
 import { hasAnySettingsPermission, hasPermission } from '../lib/permissions.js'
@@ -20,6 +20,7 @@ const navigation = [
 export function AppShell({ profile, onSignOut }) {
   const [keepSidebarCollapsed, setKeepSidebarCollapsed] = useState(false)
   const [showAccountMenu, setShowAccountMenu] = useState(false)
+  const [installPrompt, setInstallPrompt] = useState(null)
   const accountMenuRef = useRef(null)
   const allowedNavigation = navigation.filter((item) => item.settings ? hasAnySettingsPermission(profile) : hasPermission(profile, item.permission))
   const { pathname } = useLocation()
@@ -27,6 +28,19 @@ export function AppShell({ profile, onSignOut }) {
   const hasFilters = pathname === '/orders' || pathname === '/audit' || pathname === '/reports'
 
   useEffect(() => { setShowAccountMenu(false) }, [pathname])
+  useEffect(() => {
+    function captureInstallPrompt(event) {
+      event.preventDefault()
+      setInstallPrompt(event)
+    }
+    function clearInstallPrompt() { setInstallPrompt(null) }
+    window.addEventListener('beforeinstallprompt', captureInstallPrompt)
+    window.addEventListener('appinstalled', clearInstallPrompt)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', captureInstallPrompt)
+      window.removeEventListener('appinstalled', clearInstallPrompt)
+    }
+  }, [])
   useEffect(() => {
     if (!showAccountMenu) return undefined
     function closeMenu(event) {
@@ -57,6 +71,7 @@ export function AppShell({ profile, onSignOut }) {
         <header className="workspace-header">
           <div className="workspace-header__context"><span>KL Chicken Wings</span><strong>{currentPage}</strong></div>
           <div className="workspace-header__actions">
+            {installPrompt && <button className="workspace-install-button" type="button" onClick={async () => { await installPrompt.prompt(); setInstallPrompt(null) }}><Download size={17} />Install app</button>}
             {hasFilters && <button className="workspace-filter-button" type="button" onClick={() => window.dispatchEvent(new CustomEvent('kl:open-filters', { detail: { route: pathname } }))}><Funnel size={17} />Filters</button>}
             <div className="header-account-menu" ref={accountMenuRef}>
               <button className="workspace-header__user" type="button" onClick={() => setShowAccountMenu((current) => !current)} aria-expanded={showAccountMenu} aria-haspopup="menu"><div className="avatar">{profile.full_name?.slice(0, 2).toUpperCase() || 'KL'}</div><div className="workspace-header__user-copy"><strong>{profile.full_name}</strong><span>{profile.role.replaceAll('_', ' ')}</span></div><ChevronDown className="account-menu-chevron" size={16} /></button>

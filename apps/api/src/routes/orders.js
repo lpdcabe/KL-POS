@@ -9,6 +9,7 @@ const validStatuses = ['draft', 'confirmed', 'accepted', 'preparing', 'ready', '
 const activeStatuses = ['confirmed', 'accepted', 'preparing', 'ready', 'ready_for_dispatch', 'out_for_delivery']
 const completedStatuses = ['served', 'released', 'picked_up', 'delivered', 'completed']
 const checkoutSchema = z.object({
+  clientOrderId: z.uuid().optional(),
   channel: z.enum(['dine_in', 'takeout', 'store_delivery', 'grabfood']),
   items: z.array(z.object({
     id: z.uuid(),
@@ -134,6 +135,21 @@ ordersRouter.post('/', allowPermission('pos', 'owner_admin', 'manager', 'cashier
     if (!allowedMethods[input.channel].includes(input.paymentMethod)) return res.status(400).json({ error: 'Choose a payment method available for this sales channel.' })
 
     const admin = createAdminClient()
+
+    if (input.clientOrderId) {
+      const { data: existingOrder, error: existingError } = await admin
+        .from('orders')
+        .select('id, order_number, channel, status, total, created_at, payments (method, change_amount)')
+        .eq('cashier_id', req.user.id)
+        .eq('client_order_id', input.clientOrderId)
+        .maybeSingle()
+      if (existingError) throw existingError
+      if (existingOrder) {
+        const payment = existingOrder.payments?.[0]
+        return res.json({ order: { ...existingOrder, payments: undefined, paymentMethod: payment?.method, change: Number(payment?.change_amount || 0) }, duplicate: true })
+      }
+    }
+
     const { data: store, error: storeError } = await admin.from('stores').select('id').eq('is_active', true).order('created_at').limit(1).maybeSingle()
     if (storeError) throw storeError
     if (!store) return res.status(404).json({ error: 'No active store is configured.' })
@@ -147,6 +163,7 @@ ordersRouter.post('/', allowPermission('pos', 'owner_admin', 'manager', 'cashier
     const { data: order, error: orderError } = await admin.from('orders').insert({
       store_id: store.id,
       cashier_id: req.user.id,
+      client_order_id: input.clientOrderId || null,
       channel: input.channel,
       status: 'confirmed',
       table_number: input.channel === 'dine_in' ? input.tableNumber || null : null,
